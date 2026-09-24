@@ -1,4 +1,7 @@
+from collections import Counter
+
 import numpy as np
+from typing_extensions import Self
 
 from modules.metrics import *
 from modules.utils import z_normalize
@@ -63,9 +66,17 @@ class TimeSeriesKNN:
         dist: distance between the train and test samples
         """
 
-        dist = 0
+        normalize = self.metric_params.get("normalize", False)
 
-        # INSERT YOUR CODE
+        if self.metric == "euclidean":
+            dist = norm_ED_distance(x_train, x_test) if normalize else ED_distance(x_train, x_test)
+        elif self.metric == "dtw":
+            left, right = x_train, x_test
+            if normalize:
+                left, right = z_normalize(left), z_normalize(right)
+            dist = DTW_distance(left, right, r=self.metric_params.get("r", 1))
+        else:
+            raise ValueError(f"Unknown metric: {self.metric}")
 
         return dist
 
@@ -84,8 +95,12 @@ class TimeSeriesKNN:
         """
 
         neighbors = []
+        for i in range(self.X_train.shape[0]):
+            dist = self._distance(self.X_train[i], x_test)
+            neighbors.append((dist, int(self.Y_train[i])))
 
-        # INSERT YOUR CODE
+        neighbors.sort(key=lambda item: item[0])
+        neighbors = neighbors[: self.n_neighbors]
 
         return neighbors
 
@@ -104,8 +119,10 @@ class TimeSeriesKNN:
         """
 
         y_pred = []
-
-        # INSERT YOUR CODE
+        for x_test in X_test:
+            neighbor_labels = [label for _, label in self._find_neighbors(x_test)]
+            predicted = Counter(neighbor_labels).most_common(1)[0][0]
+            y_pred.append(predicted)
 
         return np.array(y_pred)
 

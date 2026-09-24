@@ -3,7 +3,21 @@ import pandas as pd
 import math
 import cv2
 import imutils
-from google.colab.patches import cv2_imshow
+import matplotlib.pyplot as plt
+
+
+def cv2_imshow(img: np.ndarray) -> None:
+    """Show an OpenCV BGR image in a local Jupyter notebook."""
+    if img.ndim == 3 and img.shape[2] == 3:
+        shown = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        plt.imshow(shown)
+    elif img.ndim == 3 and img.shape[2] == 4:
+        shown = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+        plt.imshow(shown)
+    else:
+        plt.imshow(img, cmap="gray")
+    plt.axis("off")
+    plt.show()
 
 
 class Image2TimeSeries:
@@ -32,7 +46,13 @@ class Image2TimeSeries:
         prep_img: image after preprocessing
         """
 
-        # INSERT YOUR CODE
+        if img.ndim == 3:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = img.copy()
+        inverted = cv2.bitwise_not(gray)
+        blurred = cv2.GaussianBlur(inverted, (5, 5), 0)
+        _, prep_img = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
         return prep_img
 
@@ -51,7 +71,8 @@ class Image2TimeSeries:
         """
 
         contours, hierarchy = cv2.findContours(img.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contour = [cnt for cnt in contours if cv2.contourArea(cnt) > 500][0]
+        candidates = [cnt for cnt in contours if cv2.contourArea(cnt) > 500]
+        contour = max(candidates, key=cv2.contourArea)
 
         return contour
 
@@ -197,3 +218,8 @@ class Image2TimeSeries:
             ts.append(dist)
 
         return np.array(ts)
+
+
+def image2ts(img: np.ndarray, angle_step: int = 10, visualize: bool = False) -> np.ndarray:
+    """Convert an image to a time series by the angle-based method."""
+    return Image2TimeSeries(angle_step).convert(img, is_visualize=visualize)
