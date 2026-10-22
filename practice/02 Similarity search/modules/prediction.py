@@ -59,9 +59,9 @@ class BestMatchPredictor:
 
         match self.agg_func:
             case 'average':
-                predict_values = topK_subs_predict_values.mean(axis=0).round()
+                predict_values = np.mean(topK_subs_predict_values, axis=0).round()
             case 'median':
-                predict_values = topK_subs_predict_values.median(axis=0).round()
+                predict_values = np.median(topK_subs_predict_values, axis=0).round()
             case _:
                 raise NotImplementedError
         
@@ -83,7 +83,33 @@ class BestMatchPredictor:
         """
 
         predict_values = np.zeros((self.h,))
+        query_len = len(query)
+        params = self.match_alg_params
 
-        # INSERT YOUR CODE
-        
+        # Ищем только в переданном ряде. h точек после позднего совпадения
+        # лежат уже в запросе, поэтому продолжение читаем из склейки ряда и запроса.
+        if self.match_alg == 'UCR-DTW':
+            finder = UCR_DTW(params['excl_zone_frac'], params['topK'], params['is_normalize'], params['r'])
+            found = finder.perform(ts, query)
+            indices = found['indices']
+        elif self.match_alg == 'MASS':
+            # mass2 совпадает с полным перебором z-нормализованной ED и имеет нужную длину.
+            # mass() в mass-ts 0.1.4 короче на один элемент.
+            distance_profile = np.real(mts.mass2(ts, query)).astype(np.float64)
+            excl_zone = math.ceil(query_len * params['excl_zone_frac'])
+            indices = topK_match(distance_profile, excl_zone, params['topK'])['indices']
+        else:
+            raise NotImplementedError(self.match_alg)
+
+        extended = np.concatenate([np.asarray(ts, dtype=np.float64), np.asarray(query, dtype=np.float64)])
+        futures = []
+        for idx in indices:
+            start = int(idx) + query_len
+            stop = start + self.h
+            if stop <= len(extended):
+                futures.append(extended[start:stop])
+
+        if futures:
+            predict_values = self._calculate_predict_values(np.vstack(futures))
+
         return predict_values

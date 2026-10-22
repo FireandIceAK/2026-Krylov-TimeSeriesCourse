@@ -2,8 +2,53 @@ import numpy as np
 import math
 import copy
 
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover
+    def njit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
 from modules.utils import sliding_window, z_normalize
 from modules.metrics import DTW_distance
+
+
+@njit(cache=True)
+def _lb_kim_fl(subs1: np.ndarray, subs2: np.ndarray) -> float:
+    first = subs1[0] - subs2[0]
+    last = subs1[-1] - subs2[-1]
+    return first * first + last * last
+
+
+@njit(cache=True)
+def _lb_keogh_envelope(subs1: np.ndarray, subs2: np.ndarray, r: float) -> float:
+    m = subs2.shape[0]
+    radius = int(np.floor(r * m))
+    lb = 0.0
+    for i in range(subs1.shape[0]):
+        start = i - radius
+        if start < 0:
+            start = 0
+        stop = i + radius + 1
+        if stop > m:
+            stop = m
+        upper = subs2[start]
+        lower = subs2[start]
+        for k in range(start + 1, stop):
+            value = subs2[k]
+            if value > upper:
+                upper = value
+            elif value < lower:
+                lower = value
+        point = subs1[i]
+        if point > upper:
+            diff = point - upper
+            lb += diff * diff
+        elif point < lower:
+            diff = lower - point
+            lb += diff * diff
+    return lb
 
 
 def apply_exclusion_zone(array: np.ndarray, idx: int, excl_zone: int) -> np.ndarray:
@@ -153,8 +198,25 @@ class NaiveBestMatchFinder(BestMatchFinder):
             'index' : [],
             'distance' : []
         }
-        
-        # INSERT YOUR CODE
+
+        prepared_query = np.ascontiguousarray(
+            z_normalize(query) if self.is_normalize else query, dtype=np.float64
+        )
+        if self.is_normalize:
+            mean = ts_data.mean(axis=1, keepdims=True)
+            std = ts_data.std(axis=1, keepdims=True)
+            std[std == 0] = 1.0
+            candidates = np.ascontiguousarray((ts_data - mean) / std, dtype=np.float64)
+        else:
+            candidates = np.ascontiguousarray(ts_data, dtype=np.float64)
+        for i in range(N):
+            dist_profile[i] = DTW_distance(prepared_query, candidates[i], self.r)
+
+        found = topK_match(dist_profile, excl_zone, self.topK)
+        bestmatch['index'] = found['indices']
+        bestmatch['distance'] = found['distances']
+        bestmatch['indices'] = found['indices']
+        bestmatch['distances'] = found['distances']
 
         return bestmatch
 
@@ -197,9 +259,11 @@ class UCR_DTW(BestMatchFinder):
         lb_Kim: LB_Kim lower bound
         """
 
-        lb_Kim = 0
-        
-        # INSERT YOUR CODE
+        # LB_KimFL: путь DTW обязан совместить первые и последние точки.
+        lb_Kim = _lb_kim_fl(
+            np.ascontiguousarray(subs1, dtype=np.float64),
+            np.ascontiguousarray(subs2, dtype=np.float64),
+        )
 
         return lb_Kim
 
@@ -219,9 +283,12 @@ class UCR_DTW(BestMatchFinder):
         lb_Keogh: LB_Keogh lower bound
         """
 
-        lb_Keogh = 0
-
-        # INSERT YOUR CODE
+        # Конверт строится по subs2, точки subs1 вне конверта дают квадрат отклонения.
+        lb_Keogh = _lb_keogh_envelope(
+            np.ascontiguousarray(subs1, dtype=np.float64),
+            np.ascontiguousarray(subs2, dtype=np.float64),
+            float(r),
+        )
 
         return lb_Keogh
 
@@ -275,6 +342,69 @@ class UCR_DTW(BestMatchFinder):
             'distance' : []
         }
 
-        # INSERT YOUR CODE
+        self.not_pruned_num = 0
+        self.lb_Kim_num = 0
+        self.lb_KeoghQC_num = 0
+        self.lb_KeoghCQ_num = 0
+
+        prepared_query = np.ascontiguousarray(
+            z_normalize(query) if self.is_normalize else query, dtype=np.float64
+        )
+        if self.is_normalize:
+            mean = ts_data.mean(axis=1, keepdims=True)
+            std = ts_data.std(axis=1, keepdims=True)
+            std[std == 0] = 1.0
+            candidates = np.ascontiguousarray((ts_data - mean) / std, dtype=np.float64)
+        else:
+            candidates = np.ascontiguousarray(ts_data, dtype=np.float64)
+        exact_pairs = []
+
+        def current_kth() -> float:
+            if len(exact_pairs) < self.topK:
+                return np.inf
+            remaining = sorted(exact_pairs)
+            chosen = []
+            for distance, index in remaining:
+                if any(abs(index - kept) <= excl_zone for kept in chosen):
+                    continue
+                chosen.append(index)
+                if len(chosen) == self.topK:
+                    return distance
+            return np.inf
+
+        bsf = np.inf
+        radius = float(self.r)
+        for i in range(N):
+            candidate = candidates[i]
+
+            lb_kim = _lb_kim_fl(prepared_query, candidate)
+            if lb_kim >= bsf:
+                self.lb_Kim_num += 1
+                continue
+
+            # LB_Keogh по конверту запроса: точки кандидата не должны выходить за него.
+            lb_qc = _lb_keogh_envelope(candidate, prepared_query, radius)
+            if lb_qc >= bsf:
+                self.lb_KeoghQC_num += 1
+                continue
+
+            # Обратный конверт: точки запроса против конверта кандидата.
+            lb_cq = _lb_keogh_envelope(prepared_query, candidate, radius)
+            if lb_cq >= bsf:
+                self.lb_KeoghCQ_num += 1
+                continue
+
+            distance = DTW_distance(prepared_query, candidate, self.r)
+            dist_profile[i] = distance
+            exact_pairs.append((distance, i))
+            self.not_pruned_num += 1
+            if distance < bsf:
+                bsf = current_kth()
+
+        found = topK_match(dist_profile, excl_zone, self.topK)
+        bestmatch['index'] = found['indices']
+        bestmatch['distance'] = found['distances']
+        bestmatch['indices'] = found['indices']
+        bestmatch['distances'] = found['distances']
 
         return bestmatch
