@@ -1,6 +1,4 @@
 import numpy as np
-import pandas as pd
-import math
 
 import stumpy
 from stumpy import config
@@ -22,12 +20,25 @@ def compute_mp(ts1: np.ndarray, m: int, exclusion_zone: int = None, ts2: np.ndar
     output: the matrix profile structure
             (matrix profile, matrix profile index, subsequence length, exclusion zone, the first and second time series)
     """
-    
-    # INSERT YOUR CODE
+    ts1 = np.asarray(ts1, dtype=float).reshape(-1)
 
-    return {'mp': mp[:, 0],
-            'mpi': mp[:, 1],
-            'm' : m,
-            'excl_zone': exclusion_zone,
-            'data': {'ts1' : ts1, 'ts2' : ts2}
-            }
+    if exclusion_zone is not None and exclusion_zone > 0:
+        # excl_zone = ceil(m / DENOM)  →  DENOM ≈ m / excl_zone
+        config.STUMPY_EXCL_ZONE_DENOM = max(m / float(exclusion_zone), 1e-12)
+    else:
+        config.STUMPY_EXCL_ZONE_DENOM = 4
+
+    if ts2 is None:
+        mp = stumpy.stump(ts1, m)
+    else:
+        ts2 = np.asarray(ts2, dtype=float).reshape(-1)
+        # AB-join: nearest neighbors of ts1 windows live in ts2
+        mp = stumpy.stump(ts1, m, ts2, ignore_trivial=False)
+
+    return {
+        'mp': np.asarray(mp[:, 0], dtype=float),
+        'mpi': np.asarray(mp[:, 1], dtype=int),
+        'm': m,
+        'excl_zone': exclusion_zone,
+        'data': {'ts1': ts1, 'ts2': ts2},
+    }

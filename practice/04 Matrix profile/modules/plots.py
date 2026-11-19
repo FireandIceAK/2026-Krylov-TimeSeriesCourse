@@ -5,10 +5,15 @@ import math
 # for visualization
 import plotly
 from plotly.subplots import make_subplots
-from plotly.offline import init_notebook_mode
 import plotly.graph_objs as go
 import plotly.express as px
-plotly.offline.init_notebook_mode(connected=True)
+try:
+    from plotly.offline import init_notebook_mode
+    from IPython import get_ipython
+    if get_ipython() is not None:
+        plotly.offline.init_notebook_mode(connected=True)
+except Exception:
+    pass
 
 
 def plot_ts(ts: np.ndarrray, title: str = 'Input Time Series') -> None:
@@ -52,7 +57,7 @@ def plot_ts(ts: np.ndarrray, title: str = 'Input Time Series') -> None:
                       legend=dict(font=dict(size=20, color='black'))
                       )
 
-    fig.show(renderer="colab")
+    fig.show()
 
 
 
@@ -84,11 +89,13 @@ def plot_motifs(mp: dict, top_k_motifs: dict) -> None:
     fig.add_trace(go.Scatter(x=np.arange(n), y=mp['data']['ts1'], line=dict(color='grey'), name="Time Series"), row=1, col=1)
 
     for i in range(top_k):
-        left_motif_idx = top_k_motifs['indices'][i][0]
-        right_motif_idx = top_k_motifs['indices'][i][1]
-        x = np.arange(left_motif_idx, right_motif_idx+m)
-        num_values_between_motif = right_motif_idx - (left_motif_idx+m)
-        y = np.concatenate((mp['data']['ts1'][left_motif_idx:left_motif_idx+m], np.full([1, num_values_between_motif], np.nan)[0], mp['data']['ts1'][right_motif_idx:right_motif_idx+m]))
+        # пара мотива может идти в любом порядке (правый индекс < левого), упорядочиваем
+        left_motif_idx, right_motif_idx = sorted(top_k_motifs['indices'][i])
+        seg_left = np.arange(left_motif_idx, left_motif_idx + m)
+        seg_right = np.arange(right_motif_idx, right_motif_idx + m)
+        # отдельные x для двух вхождений с разрывом NaN между ними (работает и при перекрытии)
+        x = np.concatenate((seg_left, [np.nan], seg_right))
+        y = np.concatenate((mp['data']['ts1'][left_motif_idx:left_motif_idx+m], [np.nan], mp['data']['ts1'][right_motif_idx:right_motif_idx+m]))
         color_i = i % len(px.colors.qualitative.Plotly)
         fig.add_trace(go.Scatter(x=x, y=y, name=f"Top-{i+1} motifs", line=dict(color=px.colors.qualitative.Plotly[color_i])), row=1, col=1) #line=dict(color=px.colors.qualitative.Plotly[i+1])
 
@@ -133,7 +140,7 @@ def plot_motifs(mp: dict, top_k_motifs: dict) -> None:
                       paper_bgcolor='rgba(0,0,0,0)', 
                       height=1300)
 
-    fig.show(renderer="colab")
+    fig.show()
 
 
 def plot_discords(mp: dict, top_k_discords: dict) -> None:
@@ -190,7 +197,7 @@ def plot_discords(mp: dict, top_k_discords: dict) -> None:
                       plot_bgcolor="rgba(0,0,0,0)",
                       paper_bgcolor='rgba(0,0,0,0)')
 
-    fig.show(renderer="colab")
+    fig.show()
 
 
 def plot_segmentation(mp: dict, threshold: float) -> None:
@@ -236,4 +243,4 @@ def plot_segmentation(mp: dict, threshold: float) -> None:
                       plot_bgcolor="rgba(0,0,0,0)",
                       paper_bgcolor='rgba(0,0,0,0)', height=700)
 
-    fig.show(renderer="colab")
+    fig.show()
